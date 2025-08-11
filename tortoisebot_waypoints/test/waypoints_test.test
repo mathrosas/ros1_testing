@@ -1,0 +1,12 @@
+<launch>
+  <param name="goal_x" value="-0.5"/>
+  <param name="goal_y" value="0.0"/>
+  <param name="expected_x" value="-0.5"/>
+  <param name="expected_y" value="0.0"/>
+  <param name="pos_tol" value="0.25"/>
+  <param name="yaw_tol_deg" value="20"/>
+  <test test-name="test_waypoints"
+        pkg="tortoisebot_waypoints"
+        type="test_waypoints.py"
+        time-limit="300.0"/>
+</launch>
