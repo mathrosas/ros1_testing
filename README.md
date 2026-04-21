@@ -1,77 +1,16 @@
-# ROS1 Testing — TortoiseBot Waypoints (Task 1)
+# Checkpoint 23 — TortoiseBot Waypoints (ROS 1 Tests)
 
-This is my **ROS 1** solution for **Checkpoint 23 - Testing (Task 1)**.  
-I implement a Waypoints **Action Server** for the TortoiseBot and provide **node-level tests** (with `rostest`) that verify **final position** and **final yaw**.
+ROS 1 Python **waypoint action server** with **`rostest` node-level tests** for the **TortoiseBot** differential-drive robot. The `tortoisebot_action_server.py` drives the robot toward a 2D `geometry_msgs/Point` goal by alternating between a *fix-yaw* state (face the goal) and a *go-to-point* state (drive forward). A `rostest` launch then checks that the **final position** and **final yaw** fall within tolerance. Built for **Task 1** of the Checkpoint 23 grading guide, which expects both a passing and a failing run to be reproducible from this README.
 
-If you're grading or trying this locally, follow the quickstart below to launch the simulation, start my action server, and run both **passing** and **failing** test configurations.
+<p align="center">
+  <img src="media/tortoisebot-sim.png" alt="TortoiseBot spawned in the tortoisebot_playground Gazebo world" width="650"/>
+</p>
 
----
+## How It Works
 
-## Repository
+### Action Interface (`tortoisebot_msgs/action/WaypointAction.action`)
 
-**Repo:** https://github.com/mathrosas/ros1_testing
-
-Main package in this repo:
-
-```
-tortoisebot_waypoints/
-├── scripts/
-│   └── tortoisebot_action_server.py   # Action server (ROS1, Python)
-└── test/
-    ├── test_waypoints.py              # rostest test node (Python 3)
-    └── waypoints_test.test            # rostest launch with parameters
-```
-
-I use the `WaypointAction.action` interface from `tortoisebot_msgs`.
-
-> Note: While the checkpoint mentions *Python 2*, ROS **Noetic** uses **Python 3**. My test node uses f-strings and runs with `python3`. Make sure scripts are executable and have a Python 3 shebang.
-
----
-
-## Prerequisites
-
-- ROS **Noetic**.
-- A catkin workspace with the TortoiseBot simulation available, typically at `~/simulation_ws` with package `tortoisebot_gazebo`.
-- Gazebo working.
-- If your environment doesn't already include the `tortoisebot_msgs` action definitions, see **“Action interface”** below.
-
----
-
-## Clone & Build
-
-```bash
-# Clone my repo into your simulation workspace
-cd ~/simulation_ws/src
-git clone https://github.com/mathrosas/ros1_testing.git
-
-# Build and source
-cd ~/simulation_ws
-catkin_make
-source devel/setup.bash
-```
-
-If your `tortoisebot_waypoints/scripts/tortoisebot_action_server.py` has `#!/usr/bin/env python`, switch it to Python 3 and ensure it's executable:
-
-```bash
-sed -i '1s|python$|python3|' ~/simulation_ws/src/ros1_testing/tortoisebot_waypoints/scripts/tortoisebot_action_server.py
-chmod +x ~/simulation_ws/src/ros1_testing/tortoisebot_waypoints/scripts/tortoisebot_action_server.py
-```
-
----
-
-## Action interface (if you don't already have it)
-
-If your system doesn't have `tortoisebot_msgs` with `WaypointAction.action`, create it quickly:
-
-```bash
-cd ~/simulation_ws/src
-catkin_create_pkg tortoisebot_msgs actionlib_msgs geometry_msgs message_generation
-mkdir -p tortoisebot_msgs/action
-```
-
-Create `tortoisebot_msgs/action/WaypointAction.action`:
-
-```action
+```text
 # Goal
 geometry_msgs/Point position
 ---
@@ -83,101 +22,25 @@ geometry_msgs/Point position
 string state
 ```
 
-Update **CMakeLists.txt** (key lines):
+### Action Server (`tortoisebot_action_server.py`)
 
-```cmake
-find_package(catkin REQUIRED COMPONENTS
-  actionlib_msgs
-  geometry_msgs
-  message_generation
-)
+1. Advertises the `tortoisebot_as` `SimpleActionServer` on startup and subscribes to `/odom` for pose feedback
+2. On goal receipt, extracts `(x, y)` from the goal, reads the current pose, and runs a small state machine:
+   - **`fix yaw`** — rotates in place (`cmd_vel.angular.z`) until `|desired_yaw − current_yaw| ≤ yaw_precision` (`π/90 rad`, i.e. 2°)
+   - **`go to point`** — drives straight (`cmd_vel.linear.x`) until `hypot(dx, dy) ≤ dist_precision` (`0.05 m`)
+   - **`idle`** — publishes a zero twist and returns `success = true`
+3. Publishes `geometry_msgs/Twist` on `/cmd_vel` at 25 Hz throughout
 
-add_action_files(FILES WaypointAction.action)
+### Node-Level Tests (`test/test_waypoints.py` + `test/waypoints_test.test`)
 
-generate_messages(DEPENDENCIES actionlib_msgs geometry_msgs)
+Two test cases driven by `rostest`:
 
-catkin_package(CATKIN_DEPENDS actionlib_msgs geometry_msgs message_runtime)
-```
+| Test | What it checks |
+|---|---|
+| End position | Sends a goal via `tortoisebot_as`, waits for the result, then asserts the final `[x, y]` from `/odom` is within `pos_tol` of `expected_{x,y}` |
+| End yaw | Computes the desired yaw as `atan2(goal_y − start_y, goal_x − start_x)` and asserts the final yaw is within `yaw_tol_deg` (converted to radians) |
 
-Update **package.xml** (key deps):
-
-```xml
-<build_depend>message_generation</build_depend>
-<build_depend>actionlib_msgs</build_depend>
-<build_depend>geometry_msgs</build_depend>
-<exec_depend>message_runtime</exec_depend>
-<exec_depend>actionlib_msgs</exec_depend>
-<exec_depend>geometry_msgs</exec_depend>
-
-<!-- for tests -->
-<test_depend>rostest</test_depend>
-```
-
-Rebuild:
-
-```bash
-cd ~/simulation_ws
-catkin_make
-source devel/setup.bash
-```
-
----
-
-## Launch the Simulation (ROS 1)
-
-**Terminal 1:**
-
-```bash
-source /opt/ros/noetic/setup.bash
-source ~/simulation_ws/devel/setup.bash
-roslaunch tortoisebot_gazebo tortoisebot_playground.launch
-```
-
-If the world fails to load the first time, close and relaunch. If `gzserver` lingers:
-
-```bash
-ps faux | grep gz
-kill -9 <pid>
-```
-
----
-
-## Start my Waypoints Action Server
-
-**Terminal 2:**
-
-```bash
-source /opt/ros/noetic/setup.bash
-cd ~/simulation_ws && catkin_make && source devel/setup.bash
-rosrun tortoisebot_waypoints tortoisebot_action_server.py
-```
-
-You should see logs like **“Action server started”** and state updates (“fix yaw” / “go to point”).  
-The server advertises the action **`/tortoisebot_as`**, publishes to **`/cmd_vel`**, and subscribes to **`/odom`**.
-
----
-
-## Run the Tests (rostest)
-
-My tests live in `tortoisebot_waypoints/test/`. They:
-
-- Send a goal to `/tortoisebot_as`.
-- Wait for the result.
-- Read `/odom` to check:
-  - **Position** error ≤ `pos_tol`
-  - **Yaw** error ≤ `yaw_tol_deg` (degrees; converted to radians)
-
-**Terminal 3:**
-
-```bash
-source /opt/ros/noetic/setup.bash
-cd ~/simulation_ws && catkin_make && source devel/setup.bash
-rostest tortoisebot_waypoints waypoints_test.test --reuse-master
-```
-
-Using `--reuse-master` makes `rostest` use the already running master from the simulation.
-
-### Parameters I expose in `waypoints_test.test`
+Parameters are exposed in the `.test` launch file so grading toggles don't require rebuilding:
 
 ```xml
 <launch>
@@ -194,15 +57,112 @@ Using `--reuse-master` makes `rostest` use the already running master from the s
 </launch>
 ```
 
-You can tweak these to deliberately **pass** or **fail** as needed for grading.
+## ROS 1 Interface
 
----
+| Name | Type | Direction | Description |
+|---|---|---|---|
+| `/tortoisebot_as` | `tortoisebot_msgs/WaypointAction` | action server | Goal / feedback / result endpoint |
+| `/odom` | `nav_msgs/Odometry` | sub | Pose source for both server and tests |
+| `/cmd_vel` | `geometry_msgs/Twist` | pub | Velocity command |
 
-## Grading: Passing vs Failing
+## Project Structure
 
-### ✅ Passing run
+```
+tortoisebot_waypoints/
+├── scripts/
+│   └── tortoisebot_action_server.py   # ROS 1 action server (Python 3)
+├── test/
+│   ├── test_waypoints.py              # rostest test node
+│   └── waypoints_test.test            # rostest launch (goal + tolerances)
+├── media/
+├── CMakeLists.txt
+└── package.xml
+```
 
-Use the default parameters above (goal and expected match; reasonable tolerances).
+The `WaypointAction.action` interface lives in a sibling `tortoisebot_msgs` package.
+
+## How to Use
+
+### Prerequisites
+
+- ROS **Noetic** (Python 3 — the test node uses f-strings, the action server shebang must be `python3`)
+- Gazebo (bundled with `tortoisebot_gazebo`)
+- `rospy`, `actionlib`, `geometry_msgs`, `nav_msgs`, `tf`
+- `rostest` (via `<test_depend>rostest</test_depend>` in `package.xml`)
+
+### Build
+
+```bash
+cd ~/simulation_ws
+catkin_make
+source devel/setup.bash
+```
+
+If the server script is still using `python` in its shebang, flip it to `python3` and make it executable:
+
+```bash
+sed -i '1s|python$|python3|' ~/simulation_ws/src/tortoisebot_waypoints/scripts/tortoisebot_action_server.py
+chmod +x ~/simulation_ws/src/tortoisebot_waypoints/scripts/tortoisebot_action_server.py
+```
+
+### Launch the simulation
+
+```bash
+# Terminal 1 — TortoiseBot + playground world in Gazebo
+source /opt/ros/noetic/setup.bash
+source ~/simulation_ws/devel/setup.bash
+roslaunch tortoisebot_gazebo tortoisebot_playground.launch
+```
+
+If Gazebo hangs, kill any lingering `gzserver` processes:
+
+```bash
+ps faux | grep gz
+kill -9 <pid>
+```
+
+<p align="center">
+  <img src="media/kill-gzserver.png" alt="Cleaning up a stuck gzserver process" width="650"/>
+</p>
+
+### Run the action server
+
+```bash
+# Terminal 2
+source /opt/ros/noetic/setup.bash
+cd ~/simulation_ws && catkin_make && source devel/setup.bash
+rosrun tortoisebot_waypoints tortoisebot_action_server.py
+```
+
+Expected logs: `Action server started`, then `fix yaw` / `go to point` state transitions when a goal arrives. The server advertises `/tortoisebot_as`, publishes to `/cmd_vel`, and subscribes to `/odom`.
+
+### Run the tests
+
+```bash
+# Terminal 3
+source /opt/ros/noetic/setup.bash
+cd ~/simulation_ws && catkin_make && source devel/setup.bash
+rostest tortoisebot_waypoints waypoints_test.test --reuse-master
+```
+
+`--reuse-master` keeps the Gazebo master alive between runs.
+
+## Pass / Fail Scenarios
+
+Edit `tortoisebot_waypoints/test/waypoints_test.test` — no rebuild needed for `.test` file changes:
+
+### Passing run — both tests green
+
+Default parameters (goal and `expected_*` match, loose tolerances):
+
+```xml
+<param name="goal_x" value="-0.5"/>
+<param name="goal_y" value="0.0"/>
+<param name="expected_x" value="-0.5"/>
+<param name="expected_y" value="0.0"/>
+<param name="pos_tol" value="0.25"/>
+<param name="yaw_tol_deg" value="20"/>
+```
 
 Expected summary:
 
@@ -215,32 +175,25 @@ SUMMARY
  * FAILURES: 0
 ```
 
-### ❌ Failing run (two quick ways)
+### Failing run — position mismatch
 
-Open `tortoisebot_waypoints/test/waypoints_test.test` and choose one:
-
-**Option A — Position failure**
+Make the expected pose unreachable within the tolerance:
 
 ```xml
 <param name="expected_x" value="2.0"/>
 <param name="expected_y" value="2.0"/>
-<param name="pos_tol"   value="0.05"/>
+<param name="pos_tol"    value="0.05"/>
 ```
 
-**Option B — Yaw failure**
+### Failing run — yaw mismatch
+
+Drop the yaw tolerance to zero so any heading error breaks the assertion:
 
 ```xml
 <param name="yaw_tol_deg" value="0"/>
 ```
 
-Re-run:
-
-```bash
-cd ~/simulation_ws && catkin_make && source devel/setup.bash
-rostest tortoisebot_waypoints waypoints_test.test --reuse-master
-```
-
-Expected (as per rubric):
+Expected summary for either failing variant:
 
 ```
 [ROSTEST]-----------------------------------------------------------------------
@@ -251,38 +204,32 @@ SUMMARY
  * FAILURES: 0
 ```
 
-*(In `rostest`, some mismatches show up as **errors** rather than JUnit “failures” depending on timing and assertions; either is acceptable for the failing run in the rubric.)*
-
----
-
-## Git (required by the checkpoint)
-
-I keep my work on branch **`main`** and commit meaningful changes as I go:
+Re-run the tests:
 
 ```bash
-cd ~/simulation_ws/src/ros1_testing
-git add .
-git commit -m "feat: add ROS1 waypoint action server and rostest tests"
+cd ~/simulation_ws && catkin_make && source devel/setup.bash
+rostest tortoisebot_waypoints waypoints_test.test --reuse-master
 ```
 
-Push if you've set a remote:
+### Sanity checks
 
 ```bash
-git push -u origin main
+rostopic list | grep -E "odom|cmd_vel|tortoisebot_as"
+rostopic echo /odom -n 1
+rostopic echo /cmd_vel
 ```
 
----
+## Key Concepts Covered
 
-## Troubleshooting
+- **ROS 1 action server** in Python (`actionlib.SimpleActionServer`) with a custom `.action` interface
+- **Yaw from quaternion** via `tf.transformations.euler_from_quaternion` for state-machine control
+- **Node-level `rostest`** — parametric `.test` launch + Python test node with `unittest`-style assertions
+- **Deterministic pass/fail reproduction** by toggling goal / expected / tolerance parameters in the `.test` file
+- **Python 3 compatibility on Noetic** — explicit `python3` shebang and executable bit on test + server scripts
 
-- **No `/odom`?** Ensure the Gazebo sim is running and the robot is spawned.
-- **Action server not found?** Confirm Terminal 2 is running `tortoisebot_action_server.py` and that the action name is `/tortoisebot_as`.
-- **Robot doesn't move?** Check that `/cmd_vel` is published (`rostopic echo /cmd_vel`) and nothing else is overriding it.
-- **Interpreter mismatch?** Use `#!/usr/bin/env python3` in Python scripts and make them executable.
-- **Gazebo stuck?** Kill lingering `gzserver`/`gzclient` (see above).
+## Technologies
 
----
-
-## License
-
-Unless otherwise stated, this repository's contents are provided as-is for educational purposes.
+- ROS 1 Noetic
+- Python 3 (`rospy`, `actionlib`, `nav_msgs`, `geometry_msgs`, `tf`)
+- `rostest` (`tortoisebot_msgs` custom action)
+- TortoiseBot differential-drive robot in Gazebo
